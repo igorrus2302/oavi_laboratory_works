@@ -2,6 +2,7 @@ import numpy as np
 from PIL import Image
 import os
 import requests
+import random
 
 ORIGIN = "https://www.slavcorpora.ru"
 SAMPLE_ID = "b008ae91-32cf-4d7d-84e4-996144e4edb7"
@@ -9,17 +10,42 @@ DOWNLOAD_LIMIT = 3
 INPUT_FOLDER = 'input_images'
 OUTPUT_FOLDER = 'output_images'
 
+def choose_mode():
+    print("Выберите режим загрузки изображений:")
+    print("1 — Последовательная загрузка")
+    print("2 — Случайная загрузка")
 
-def download_images():
+    while True:
+        choice = input("Введите 1 или 2: ").strip()
+
+        if choice == "1":
+            return "sequential"
+        elif choice == "2":
+            return "random"
+        else:
+            print("Ошибка! Введите 1 или 2.")
+
+def download_images(mode):
     os.makedirs(INPUT_FOLDER, exist_ok=True)
 
     sample = requests.get(f"{ORIGIN}/api/samples/{SAMPLE_ID}").json()
-    image_paths = [f"{ORIGIN}/images/{p['filename']}" for p in sample["pages"]]
+    pages = sample["pages"]
+
+    if mode == "sequential":
+        selected_pages = pages[:DOWNLOAD_LIMIT]
+
+    elif mode == "random":
+        if DOWNLOAD_LIMIT > len(pages):
+            raise ValueError("DOWNLOAD_LIMIT больше количества изображений")
+        selected_pages = random.sample(pages, DOWNLOAD_LIMIT)
+
+    else:
+        raise ValueError("Неверный режим")
 
     count = 0
-    for idx, url in enumerate(image_paths):
-        if count >= DOWNLOAD_LIMIT:
-            break
+
+    for idx, p in enumerate(selected_pages):
+        url = f"{ORIGIN}/images/{p['filename']}"
 
         filename = f"img_{idx:04d}.png"
         filepath_png = os.path.join(INPUT_FOLDER, filename)
@@ -42,27 +68,6 @@ def download_images():
         count += 1
 
     print(f"Downloaded and converted {count} images to PNG")
-    os.makedirs(INPUT_FOLDER, exist_ok=True)
-
-    sample = requests.get(f"{ORIGIN}/api/samples/{SAMPLE_ID}").json()
-    image_paths = [f"{ORIGIN}/images/{p['filename']}" for p in sample["pages"]]
-
-    count = 0
-    for url in image_paths:
-        if count >= DOWNLOAD_LIMIT:
-            break
-
-        filename = url.split('/')[-1]
-        filepath = os.path.join(INPUT_FOLDER, filename)
-
-        if not os.path.exists(filepath):
-            img_data = requests.get(url).content
-            with open(filepath, 'wb') as f:
-                f.write(img_data)
-
-        count += 1
-
-    print(f"Downloaded {count} images")
 
 def rgb_to_grayscale(img_array):
     r = img_array[:, :, 0].astype(float)
@@ -164,7 +169,8 @@ def process_image(path, out_prefix):
 if __name__ == '__main__':
     os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
-    download_images()
+    mode = choose_mode()
+    download_images(mode)
 
     for file in os.listdir(INPUT_FOLDER):
         if file.endswith('.png') or file.endswith('.bmp'):
