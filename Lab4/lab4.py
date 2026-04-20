@@ -13,7 +13,6 @@ INPUT_DIR = "input_images"
 OUTPUT_DIR = "output_images"
 
 MAX_IMAGES = 1
-THRESHOLD = 100
 
 os.makedirs(INPUT_DIR, exist_ok=True)
 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -95,7 +94,8 @@ def process_image(path, index):
     Gy_norm = normalize(Gy)
     G_norm = normalize(G)
 
-    _, G_bin = cv2.threshold(G_norm, THRESHOLD, 255, cv2.THRESH_BINARY)
+    otsu_threshold, G_bin = cv2.threshold(G_norm, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    print(f"Порог Оцу для изображения {index}: {otsu_threshold}")
 
     cv2.imwrite(f"{OUTPUT_DIR}/img_{index}_color.png", img_color)
     cv2.imwrite(f"{OUTPUT_DIR}/img_{index}_gray.png", gray)
