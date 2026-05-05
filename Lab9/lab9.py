@@ -14,6 +14,8 @@ WINDOW_DURATION = 0.05
 OVERLAP = 0.75
 DT = 0.1
 DF = 50
+MAX_FREQ = 5000
+
 
 signal, sr = sf.read(INPUT_FILE)
 
@@ -22,6 +24,7 @@ if signal.ndim > 1:
 
 N = len(signal)
 duration = N / sr
+
 
 nperseg = int(WINDOW_DURATION * sr)
 noverlap = int(nperseg * OVERLAP)
@@ -32,29 +35,39 @@ f, t, Zxx = stft(signal, fs=sr, window=window,
 
 magnitude = np.abs(Zxx)
 
+
+freq_mask = f <= MAX_FREQ
+f_cut = f[freq_mask]
+magnitude_cut = magnitude[freq_mask, :]
+
+
 plt.figure(figsize=(10, 5))
-plt.pcolormesh(t, f, 20 * np.log10(magnitude + 1e-10), shading='gouraud')
-plt.yscale('log')
+plt.pcolormesh(t, f_cut, 20*np.log10(magnitude_cut + 1e-10),
+               shading='gouraud', cmap='inferno')
 plt.title("Spectrogram before")
 plt.xlabel("Time, s")
 plt.ylabel("Frequency, Hz")
+plt.ylim(0, MAX_FREQ)
 plt.colorbar(label="dB")
 plt.savefig(f"{OUTPUT_DIR}/spectrogram_before.png")
 plt.close()
 
-energy = np.sum(magnitude ** 2, axis=0)
 
+energy = np.sum(magnitude_cut**2, axis=0)
 threshold = np.percentile(energy, 20)
-noise_frames = magnitude[:, energy < threshold]
+noise_frames = magnitude_cut[:, energy < threshold]
 
 noise_spectrum = np.mean(noise_frames, axis=1, keepdims=True)
 
-k = 1.0
 
-clean_magnitude = magnitude - k * noise_spectrum
-clean_magnitude = np.maximum(clean_magnitude, 0)
+k = 0.8
 
-Zxx_clean = clean_magnitude * np.exp(1j * np.angle(Zxx))
+clean_magnitude_cut = magnitude_cut - k * noise_spectrum
+clean_magnitude_cut = np.maximum(clean_magnitude_cut, 0.05 * magnitude_cut)
+
+Zxx_clean = np.zeros_like(Zxx, dtype=complex)
+Zxx_clean[freq_mask, :] = clean_magnitude_cut * np.exp(1j * np.angle(Zxx[freq_mask, :]))
+
 
 _, signal_clean = istft(Zxx_clean, fs=sr,
                         window=window,
@@ -63,22 +76,28 @@ _, signal_clean = istft(Zxx_clean, fs=sr,
 
 signal_clean = signal_clean[:len(signal)]
 
+
 sf.write(f"{OUTPUT_DIR}/denoised.wav", signal_clean, sr)
+
 
 f2, t2, Zxx2 = stft(signal_clean, fs=sr,
                     window=window,
                     nperseg=nperseg,
                     noverlap=noverlap)
 
+magnitude2 = np.abs(Zxx2)[freq_mask, :]
+
 plt.figure(figsize=(10, 5))
-plt.pcolormesh(t2, f2, 20 * np.log10(np.abs(Zxx2) + 1e-10), shading='gouraud')
-plt.yscale('log')
+plt.pcolormesh(t2, f_cut, 20*np.log10(magnitude2 + 1e-10),
+               shading='gouraud', cmap='inferno')
 plt.title("Spectrogram after")
 plt.xlabel("Time, s")
 plt.ylabel("Frequency, Hz")
+plt.ylim(0, MAX_FREQ)
 plt.colorbar(label="dB")
 plt.savefig(f"{OUTPUT_DIR}/spectrogram_after.png")
 plt.close()
+
 
 plt.figure()
 plt.plot(signal)
@@ -92,45 +111,65 @@ plt.title("Waveform after")
 plt.savefig(f"{OUTPUT_DIR}/waveform_denoised.png")
 plt.close()
 
-noise = signal - signal_clean
+noise_est = signal - signal_clean
 
-def snr(signal, noise):
-    return 10 * np.log10(np.sum(signal ** 2) / np.sum(noise ** 2))
+snr_before = 10 * np.log10(np.sum(signal**2) / np.sum(noise_est**2))
+snr_after = 10 * np.log10(np.sum(signal_clean**2) / np.sum(noise_est**2))
 
 
-snr_before = snr(signal, noise)
-snr_after = snr(signal_clean, signal - signal_clean)
-
+power = magnitude_cut**2
 time_bins = np.arange(0, duration, DT)
-freq_bins = np.arange(0, sr / 2, DF)
 
 peaks = []
 
 for i in range(len(time_bins) - 1):
     t_mask = (t >= time_bins[i]) & (t < time_bins[i + 1])
 
-    for j in range(len(freq_bins) - 1):
-        f_mask = (f >= freq_bins[j]) & (f < freq_bins[j + 1])
+    if not np.any(t_mask):
+        continue
 
-        if np.any(t_mask) and np.any(f_mask):
-            block = magnitude[np.ix_(f_mask, t_mask)]
-            energy_block = np.sum(block ** 2)
+    block = power[:, t_mask]
+    avg_spectrum = np.mean(block, axis=1)
 
-            peaks.append([
-                time_bins[i],
-                time_bins[i + 1],
-                freq_bins[j],
-                freq_bins[j + 1],
-                energy_block
-            ])
+    j = np.argmax(avg_spectrum)
+
+    peaks.append([
+        time_bins[i],
+        time_bins[i + 1],
+        f_cut[j],
+        f_cut[j] + DF,
+        avg_spectrum[j]
+    ])
 
 peaks = sorted(peaks, key=lambda x: x[4], reverse=True)
+
+
+plt.figure(figsize=(10, 5))
+plt.pcolormesh(t, f_cut, 20*np.log10(magnitude_cut + 1e-10),
+               shading='gouraud', cmap='inferno')
+
+top_peaks = peaks[:5]
+
+for p in top_peaks:
+    t_center = (p[0] + p[1]) / 2
+    f_center = (p[2] + p[3]) / 2
+    plt.scatter(t_center, f_center, color='cyan', s=70)
+
+plt.title("Spectrogram with peaks")
+plt.xlabel("Time, s")
+plt.ylabel("Frequency, Hz")
+plt.ylim(0, MAX_FREQ)
+plt.colorbar(label="dB")
+plt.savefig(f"{OUTPUT_DIR}/spectrogram_with_peaks.png")
+plt.close()
+
 
 df = pd.DataFrame(peaks, columns=["t1", "t2", "f1", "f2", "E"])
 df.to_csv(f"{OUTPUT_DIR}/energy_peaks.csv", index=False)
 
+
 print("SNR before:", snr_before)
 print("SNR after:", snr_after)
 print("Top-5 peaks:")
-for p in peaks[:5]:
+for p in top_peaks:
     print(p)
